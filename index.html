@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>Waterfront Walkathon · Toronto</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; }
+
+  #header {
+    background: #fff;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #e5e5e5;
+    position: sticky; top: 0; z-index: 1000;
+  }
+  #header h1 { font-size: 15px; font-weight: 600; color: #111; }
+  #header p { font-size: 11px; color: #888; margin-top: 1px; }
+  .legend { display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
+  .leg { display: flex; align-items: center; gap: 4px; font-size: 10px; color: #555; }
+  .leg-line { width: 18px; height: 3px; border-radius: 2px; }
+  .leg-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+  #map { height: calc(100vh - 56px); width: 100%; }
+
+  /* Station panel */
+  #panel {
+    display: none;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: #fff;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -4px 24px rgba(0,0,0,0.15);
+    padding: 16px;
+    z-index: 2000;
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  #panel-handle {
+    width: 36px; height: 4px; background: #ddd;
+    border-radius: 2px; margin: 0 auto 14px;
+  }
+  #panel-header {
+    display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;
+  }
+  #panel-title { font-size: 16px; font-weight: 600; color: #111; flex: 1; }
+  #close-btn {
+    background: #f0f0f0; border: none; border-radius: 50%;
+    width: 28px; height: 28px; font-size: 16px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    color: #555; flex-shrink: 0; margin-left: 8px;
+  }
+  #panel-location { font-size: 12px; color: #888; margin-bottom: 14px; }
+  .vol-label { font-size: 11px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+  #panel-volunteers { display: flex; flex-wrap: wrap; gap: 8px; }
+  .vol-badge {
+    background: #ede9fe; color: #5b21b6;
+    font-size: 13px; padding: 6px 12px;
+    border-radius: 20px; font-weight: 500;
+  }
+
+  /* Backdrop */
+  #backdrop {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.3);
+    z-index: 1999;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div>
+    <h1>Waterfront Walkathon</h1>
+    <p>Martin Goodman Trail · Toronto</p>
+  </div>
+  <div class="legend">
+    <span class="leg"><span class="leg-line" style="background:#2563eb;"></span>Out</span>
+    <span class="leg"><span class="leg-line" style="background:#dc2626;"></span>Back</span>
+    <span class="leg"><span class="leg-dot" style="background:#7c3aed;"></span>Station</span>
+  </div>
+</div>
+
+<div id="map"></div>
+<div id="backdrop" onclick="closePanel()"></div>
+<div id="panel">
+  <div id="panel-handle"></div>
+  <div id="panel-header">
+    <div id="panel-title"></div>
+    <button id="close-btn" onclick="closePanel()">×</button>
+  </div>
+  <div id="panel-location"></div>
+  <div class="vol-label">Volunteers assigned</div>
+  <div id="panel-volunteers"></div>
+</div>
+
+<script>
+// ── ROUTE DATA ──────────────────────────────────────────────────────────────
+// Outbound (blue): HTO Park → west along Queens Quay / MGT → Strachan Ave
+const outbound = [
+  [43.63840, -79.37650], // HTO Park
+  [43.63835, -79.37800],
+  [43.63820, -79.38050], // Lower Spadina Ave
+  [43.63780, -79.38260],
+  [43.63700, -79.38520],
+  [43.63650, -79.38780], // Dan Leckie Way
+  [43.63550, -79.38980],
+  [43.63460, -79.39200], // Eireann Quay
+  [43.63380, -79.39500],
+  [43.63310, -79.39780], // Stadium Rd
+  [43.63260, -79.40050],
+  [43.63220, -79.40200], // MGT turns right (toward Remembrance Dr)
+  [43.63240, -79.40380],
+  [43.63270, -79.40560],
+  [43.63280, -79.40750],
+  [43.63240, -79.40900],
+  [43.63200, -79.41100],
+  [43.63170, -79.41350],
+  [43.63140, -79.41600],
+  [43.63110, -79.41950], // Strachan Ave turnaround
+];
+
+// Return (red): Remembrance Dr loop → Waterfront Trail → back to HTO Park
+const returnLeg = [
+  [43.63110, -79.41950], // Strachan Ave — left on Remembrance Dr (inland/north)
+  [43.63200, -79.41900],
+  [43.63320, -79.41750],
+  [43.63450, -79.41550],
+  [43.63560, -79.41300],
+  [43.63620, -79.41050],
+  [43.63640, -79.40800], // Coronation Park area
+  [43.63620, -79.40550],
+  [43.63580, -79.40300],
+  [43.63520, -79.40100], // first left back to lakeside MGT
+  [43.63420, -79.39950],
+  [43.63340, -79.39750], // turns left (east)
+  [43.63360, -79.39550], // right to stay on MGT
+  [43.63400, -79.39350], // right again
+  [43.63450, -79.39150], // right again
+  [43.63500, -79.38950], // left to stay on MGT
+  [43.63530, -79.38720], // cross Stadium Rd
+  [43.63570, -79.38480], // cross Eireann Quay
+  [43.63630, -79.38250], // Dan Leckie fork → Waterfront Trail (lake side)
+  [43.63580, -79.38050],
+  [43.63530, -79.37850],
+  [43.63490, -79.37700], // T-point → turn left
+  [43.63560, -79.37620],
+  [43.63650, -79.37580], // first right back to MGT
+  [43.63740, -79.37600],
+  [43.63820, -79.37620],
+  [43.63840, -79.37650], // HTO Park finish
+];
+
+// ── STATIONS ────────────────────────────────────────────────────────────────
+const stations = [
+  {
+    id: 1,
+    name: "Station 1 · HTO Park",
+    location: "Start & Finish — HTO Park West, Queens Quay W",
+    lat: 43.63840, lng: -79.37650,
+    volunteers: ["Add volunteer names here", "Add volunteer names here"]
+  },
+  {
+    id: 2,
+    name: "Station 2 · Lower Spadina Ave",
+    location: "Martin Goodman Trail at Lower Spadina Ave",
+    lat: 43.63800, lng: -79.38220,
+    volunteers: ["Add volunteer names here", "Add volunteer names here"]
+  },
+  {
+    id: 3,
+    name: "Station 3 · Dan Leckie Way",
+    location: "Martin Goodman Trail at Dan Leckie Way",
+    lat: 43.63650, lng: -79.38780,
+    volunteers: ["Add volunteer names here", "Add volunteer names here"]
+  },
+  {
+    id: 4,
+    name: "Station 4 · Stadium Road",
+    location: "Martin Goodman Trail at Stadium Road",
+    lat: 43.63310, lng: -79.39780,
+    volunteers: ["Add volunteer names here", "Add volunteer names here"]
+  },
+  {
+    id: 5,
+    name: "Station 5 · Strachan Ave Turnaround",
+    location: "MGT at Strachan Ave — turnaround point",
+    lat: 43.63110, lng: -79.41950,
+    volunteers: ["Add volunteer names here", "Add volunteer names here"]
+  },
+  {
+    id: 6,
+    name: "Station 6 · Coronation Park",
+    location: "Remembrance Drive — return leg",
+    lat: 43.63640, lng: -79.40800,
+    volunteers: ["Add volunteer names here", "Add volunteer names here"]
+  }
+];
+
+// ── MAP INIT ─────────────────────────────────────────────────────────────────
+const map = L.map('map').setView([43.6340, -79.3990], 14);
+
+// OpenStreetMap tiles — full street names & detail
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19
+}).addTo(map);
+
+// Draw routes
+L.polyline(outbound, { color: '#2563eb', weight: 5, opacity: 0.9 }).addTo(map);
+L.polyline(returnLeg, { color: '#dc2626', weight: 5, opacity: 0.9 }).addTo(map);
+
+// Start/finish marker
+L.circleMarker([43.63840, -79.37650], {
+  radius: 8, color: '#fff', weight: 2, fillColor: '#16a34a', fillOpacity: 1
+}).addTo(map).bindTooltip('Start / Finish', { permanent: false });
+
+// Station markers
+function makeIcon(num, isStart) {
+  const bg = isStart ? '#16a34a' : '#7c3aed';
+  return L.divIcon({
+    className: '',
+    html: `<div style="background:${bg};color:#fff;border-radius:50%;width:32px;height:32px;
+           display:flex;align-items:center;justify-content:center;font-size:13px;
+           font-weight:600;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);
+           font-family:-apple-system,sans-serif;">${num}</div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16]
+  });
+}
+
+stations.forEach((s, i) => {
+  const marker = L.marker([s.lat, s.lng], { icon: makeIcon(s.id, i === 0) }).addTo(map);
+  marker.on('click', () => openPanel(s));
+});
+
+// ── PANEL ────────────────────────────────────────────────────────────────────
+function openPanel(s) {
+  document.getElementById('panel-title').textContent = s.name;
+  document.getElementById('panel-location').textContent = s.location;
+  const vol = document.getElementById('panel-volunteers');
+  vol.innerHTML = '';
+  s.volunteers.forEach(v => {
+    const b = document.createElement('span');
+    b.className = 'vol-badge';
+    b.textContent = v;
+    vol.appendChild(b);
+  });
+  document.getElementById('panel').style.display = 'block';
+  document.getElementById('backdrop').style.display = 'block';
+}
+
+function closePanel() {
+  document.getElementById('panel').style.display = 'none';
+  document.getElementById('backdrop').style.display = 'none';
+}
+</script>
+</body>
+</html>
